@@ -1,3 +1,4 @@
+[![ci](actions/workflows/ci.yml/badge.svg)](actions/workflows/ci.yml)
 # Network Monitor Tool
 
 This is a Network Monitor Tool that pings a specified host at regular intervals and executes a predefined command if the host becomes unreachable for a given number of consecutive failures.
