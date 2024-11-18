@@ -70,7 +70,7 @@ func main() {
 			Str("vcsVersion", vcsVersion).
 			Str("goVersion", buildInfo.GoVersion).
 			Str("version", version).
-			Msgf("duc2mqtt version %s compiled with %s, commitId: %s", version, buildInfo.GoVersion, vcsVersion)
+			Msgf("network-monitor version %s compiled with %s, commitId: %s", version, buildInfo.GoVersion, vcsVersion)
 		os.Exit(1)
 	}
 
