@@ -146,16 +146,16 @@ func setupMqtt() {
 }
 
 func pingIP(pinger *ping.Pinger) error {
-	oldStats := pinger.Statistics()
+	oldPacketsRecv := pinger.PacketsRecv
 
 	err := pinger.Run()
 	if err != nil {
 		log.Logger.Error().Err(err).Msgf("Failed to ping %s", pinger.Addr())
 	}
-	stats := pinger.Statistics()
-	pinger.Stop()
+	time.Sleep(1 * time.Second)
 
-	if oldStats.PacketsRecv < stats.PacketsRecv {
+	if pinger.PacketsRecv <= oldPacketsRecv {
+		log.Warn().Msgf("Expected %d to be more than %d", pinger.PacketsRecv, oldPacketsRecv)
 		return fmt.Errorf("no packets received")
 	}
 	return nil
