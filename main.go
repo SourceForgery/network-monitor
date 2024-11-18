@@ -78,35 +78,38 @@ func main() {
 	if err != nil {
 		log.Logger.Fatal().Err(err).Msgf("Failed to create pinger for %s", opts.IP)
 	}
-	pinger.Count = 1
-	pinger.Timeout = time.Duration(opts.Timeout) * time.Millisecond
 	pinger.SetPrivileged(!opts.Unprivileged)
 
 	if opts.MqttUri != "" {
 		setupMqtt()
 	}
 
-	failureCount := 0
-	for {
-		err = pingIP(pinger)
-		if err != nil {
-			failureCount++
-			log.Warn().Err(err).Msgf("Failed to ping %s. Failure count: %d", opts.IP, failureCount)
-			setStatus(false)
-		} else {
-			log.Debug().Msgf("Successfully pinged %s", opts.IP)
-			failureCount = 0
-			setStatus(true)
-		}
+	acceptedDiff := 0
+	pinger.OnRecv = func(packet *ping.Packet) {
+		log.Debug().Msgf("Successfully pinged %s", opts.IP)
+		setStatus(true)
+		statistics := pinger.Statistics()
+		acceptedDiff = statistics.PacketsSent - statistics.PacketsRecv
+	}
 
-		if failureCount >= opts.MaxFailures {
+	go func() {
+		err := pinger.Run()
+		if err != nil {
+			log.Logger.Error().Err(err).Msgf("Failed to ping %s", pinger.Addr())
+		}
+	}()
+	defer pinger.Stop()
+
+	for {
+		time.Sleep(time.Duration(opts.Timeout) * time.Millisecond)
+		stats := pinger.Statistics()
+		if acceptedDiff+stats.PacketsRecv+opts.MaxFailures < stats.PacketsSent {
 			log.Error().Msgf("Ping to %s failed %d times consecutively. Running command: %s", opts.IP, opts.MaxFailures, strings.Join(opts.Command.Args, " "))
+			setStatus(false)
 			runCommand(opts.Command.Args)
-			failureCount = 0
 			time.Sleep(time.Duration(opts.Cooldown) * time.Millisecond)
 		}
-
-		time.Sleep(time.Duration(opts.Interval) * time.Millisecond)
+		log.Debug().Msgf("Sent %d packets and received %d packets and accepted diff: %d", stats.PacketsSent, stats.PacketsRecv, acceptedDiff)
 	}
 }
 
