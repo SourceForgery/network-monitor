@@ -16,21 +16,27 @@ import (
 )
 
 var opts struct {
-	Interval        int    `long:"interval" description:"Interval in milliseconds" default:"3000"`
-	MaxFailures     int    `long:"max-failures" description:"Maximum number of consecutive failures before running the command" default:"5"`
-	IP              string `long:"host" description:"Host name to ping (IP address recommended)" default:"1.1.1.1"`
-	Timeout         int    `long:"timeout" description:"Timeout in milliseconds" default:"1000"`
-	Unprivileged    bool   `long:"unprivileged" description:"Run ping in unprivileged mode (see https://github.com/go-ping/ping) "`
-	Cooldown        int    `long:"cooldown" description:"Cooldown in milliseconds after running the command before pinging again" default:"300000"`
-	MqttUri         string `long:"mqtt-uri" description:"The URI to the mqtt server. If using virtual-host extension (rabbitmq), it would be tcp://test.mosquitto.org:1883/vhost"`
-	MqttUniqueId    string `long:"mqtt-unique-id" description:"The unique id of this device" default:"network-monitor"`
-	MqttName        string `long:"mqtt-name" description:"The name of this device" default:"network-monitor"`
-	MqttTopicPrefix string `long:"mqtt-topic-prefix" description:"The mqtt prefix to use" default:"homeassistant"`
+	Verbose       []bool `long:"verbose" short:"v" description:"Verbosity. Repeat for increasing"`
+	Quiet         []bool `long:"quiet" short:"q" description:"Make less verbose. Repeat for even less"`
+	Version       bool   `long:"version" short:"V" description:"Display version"`
+	LoggingFormat string `short:"l" long:"logging" choice:"coloured" choice:"plain" choice:"json" choice:"default" default:"default" description:"Log output format"`
+
+	Interval        int    `long:"interval" env:"INTERVAL" description:"Interval in milliseconds" default:"3000"`
+	MaxFailures     int    `long:"max-failures" env:"MAX_FAILURES" description:"Maximum number of consecutive failures before running the command" default:"5"`
+	IP              string `long:"host" env:"IP" description:"Host name to ping (IP address recommended)" default:"1.1.1.1"`
+	Timeout         int    `long:"timeout" env:"TIMEOUT" description:"Timeout in milliseconds" default:"1000"`
+	Unprivileged    bool   `long:"unprivileged" env:"UNPRIVILEGED" description:"Run ping in unprivileged mode (see https://github.com/go-ping/ping) "`
+	Cooldown        int    `long:"cooldown" env:"COOLDOWN" description:"Cooldown in milliseconds after running the command before pinging again" default:"300000"`
+	MqttUri         string `long:"mqtt-uri" env:"MQTT_URI" description:"The URI to the mqtt server. If using virtual-host extension (rabbitmq), it would be tcp://test.mosquitto.org:1883/vhost"`
+	MqttUniqueId    string `long:"mqtt-unique-id" env:"MQTT_UNIQUE_ID" description:"The unique id of this device" default:"network-monitor"`
+	MqttName        string `long:"mqtt-name" env:"MQTT_NAME" description:"The name of this device" default:"network-monitor"`
+	MqttTopicPrefix string `long:"mqtt-topic-prefix" env:"MQTT_TOPIC_PREFIX" description:"The mqtt prefix to use" default:"homeassistant"`
 	Command         struct {
 		Args []string `required:"1"`
 	} `positional-args:"yes"`
 }
 
+var version = "unknown"
 var hassioClient *hassio.Client
 var problem *bool
 var hassioSensor = hassio.NewAlarmSensorConfig("internet", "uptime")
@@ -38,16 +44,34 @@ var hassioSensor = hassio.NewAlarmSensorConfig("internet", "uptime")
 func main() {
 	parser := flags.NewParser(&opts, flags.Default)
 	_, err := parser.Parse()
-	if terminalOutput() {
-		log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout}).
-			With().Timestamp().
-			Logger()
-	}
 	if err != nil {
 		if flags.WroteHelp(err) {
 			os.Exit(1)
 		}
 		log.Logger.Fatal().Err(err).Msg("Failed to parse command line arguments")
+	}
+
+	initializeLogging()
+
+	buildInfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		log.Fatal().Msg("Failed to read build info")
+	}
+
+	var vcsVersion = "unknown"
+	for _, setting := range buildInfo.Settings {
+		if setting.Key == "vcs.revision" {
+			vcsVersion = setting.Value
+		}
+	}
+
+	if opts.Version {
+		log.Info().
+			Str("vcsVersion", vcsVersion).
+			Str("goVersion", buildInfo.GoVersion).
+			Str("version", version).
+			Msgf("duc2mqtt version %s compiled with %s, commitId: %s", version, buildInfo.GoVersion, vcsVersion)
+		os.Exit(1)
 	}
 
 	pinger, err := ping.NewPinger(opts.IP)
@@ -70,7 +94,7 @@ func main() {
 			log.Warn().Err(err).Msgf("Failed to ping %s. Failure count: %d", opts.IP, failureCount)
 			setStatus(false)
 		} else {
-			log.Info().Msgf("Successfully pinged %s", opts.IP)
+			log.Debug().Msgf("Successfully pinged %s", opts.IP)
 			failureCount = 0
 			setStatus(true)
 		}
@@ -166,5 +190,42 @@ func setStatus(newStatus bool) {
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to send data")
 		}
+	}
+}
+
+func initializeLogging() {
+	log.Logger = getLogger(opts.LoggingFormat).
+		With().Timestamp().
+		Logger()
+	setLogLevel(len(opts.Quiet) - len(opts.Verbose) + 1)
+}
+
+func getLogger(loggingFormat string) (lg zerolog.Logger) {
+	switch loggingFormat {
+	case "default":
+		if terminalOutput() {
+			return getLogger("coloured")
+		} else {
+			return getLogger("plain")
+		}
+	case "json":
+		return zerolog.New(os.Stdout)
+	case "coloured":
+		return zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	case "plain":
+		return zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339, NoColor: true})
+	default:
+		log.Panic().Msgf("What the f is %s", loggingFormat)
+	}
+	return lg
+}
+
+func setLogLevel(verbosity int) {
+	if verbosity < 0 {
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	} else if verbosity > 6 {
+		zerolog.SetGlobalLevel(zerolog.Disabled)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.Level(verbosity))
 	}
 }
